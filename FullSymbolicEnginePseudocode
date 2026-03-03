@@ -1,0 +1,246 @@
+# ==========================================
+# 1. Expression Tree Node
+# ==========================================
+class ExprNode:
+    op                # operator or constant (e.g., '+', '*', 'AND', 'OR', 'x', 5)
+    children          # list of child ExprNodes
+    domain            # "arithmetic", "logic", or "relational"
+    constraints       # set of symbolic constraints, e.g., "x != 0", "y >= 0"
+
+    function copy():
+        return deep copy of node including constraints
+
+    function repr():
+        if no children:
+            return string(op)
+        else:
+            return "op(child1, child2, ...)"
+
+# ==========================================
+# 2. Pattern Matching & Rewrite Rules
+# ==========================================
+class PatternVar:
+    name
+
+function match(pattern, node, bindings={}):
+    if pattern is PatternVar:
+        if pattern.name in bindings:
+            if bindings[pattern.name] != node:
+                return None
+        bindings[pattern.name] = node
+        return bindings
+
+    if pattern.op != node.op OR len(pattern.children) != len(node.children):
+        return None
+
+    for each (p_child, n_child) in zip(pattern.children, node.children):
+        bindings = match(p_child, n_child, bindings)
+        if bindings is None:
+            return None
+    return bindings
+
+function substitute(template, bindings):
+    if template is PatternVar:
+        return bindings[template.name].copy()
+    new_node = ExprNode(template.op)
+    new_node.domain = template.domain
+    new_node.constraints = copy(template.constraints)
+    new_node.children = [substitute(c, bindings) for c in template.children]
+    return new_node
+
+class RewriteRule:
+    pattern
+    replacement
+    condition       # optional function(bindings) -> bool
+
+    function apply(node):
+        bindings = match(pattern, node)
+        if bindings is None:
+            return None
+        if condition and not condition(bindings):
+            return None
+        return substitute(replacement, bindings)
+
+# ==========================================
+# 3. Canonicalization
+# ==========================================
+class Canonicalizer:
+    COMMUTATIVE = {Add, Mul, AND, OR}
+    ASSOCIATIVE = {Add, Mul, AND, OR}
+
+    function canonicalize(node):
+        node = canonicalize_children(node)
+
+        # Flatten associative operations
+        if node.op in ASSOCIATIVE:
+            flattened_children = []
+            for child in node.children:
+                if child.op == node.op:
+                    flattened_children += child.children
+                else:
+                    flattened_children.append(child)
+            node.children = flattened_children
+
+        # Sort commutative operations
+        if node.op in COMMUTATIVE:
+            node.children.sort_by(repr)
+
+        # Constant folding for arithmetic
+        node = fold_constants(node)
+
+        # Logic normalization (NNF)
+        node = logic_nnf(node)
+
+        return node
+
+    function canonicalize_children(node):
+        node.children = [canonicalize(c) for c in node.children]
+        return node
+
+    function fold_constants(node):
+        if node.op == Add:
+            separate constants from children
+            sum constants and rebuild node
+        if node.op == Mul:
+            separate constants from children
+            multiply constants and rebuild node
+        return node
+
+    function logic_nnf(node):
+        if node.op == NOT:
+            child = node.children[0]
+            if child.op == NOT:
+                return logic_nnf(child.children[0])
+            if child.op == AND:
+                return OR([logic_nnf(NOT(c)) for c in child.children])
+            if child.op == OR:
+                return AND([logic_nnf(NOT(c)) for c in child.children])
+        node.children = [logic_nnf(c) for c in node.children]
+        return node
+
+# ==========================================
+# 4. Constraint Propagation
+# ==========================================
+function propagate_constraints(node):
+    for each child in node.children:
+        propagate_constraints(child)
+    merge child constraints into node.constraints
+
+    # Arithmetic rules
+    if node.op == Div:
+        node.constraints.add(node.children[1] != 0)
+    if node.op == Sqrt:
+        node.constraints.add(node.children[0] >= 0)
+    if node.op == Pow:
+        base, exp = node.children
+        if exp is non-integer constant:
+            node.constraints.add(base >= 0)
+
+    # Logic rules: detect trivial contradictions (e.g., A AND NOT A)
+    # Relational rules can be added similarly
+
+    return node
+
+# ==========================================
+# 5. Domain Theories
+# ==========================================
+class DomainTheory:
+    function validate(node):
+        return True
+
+class ArithmeticTheory(DomainTheory):
+    function validate(node):
+        for c in node.constraints:
+            if c requires value not allowed by node:
+                return False
+        return True
+
+class LogicTheory(DomainTheory):
+    function validate(node):
+        for c in node.constraints:
+            if c == contradiction:
+                return False
+        return True
+
+class MultiDomainTheory(DomainTheory):
+    theories  # list of DomainTheory
+    function validate(node):
+        for t in theories:
+            if not t.validate(node):
+                return False
+        return True
+
+# ==========================================
+# 6. Rewrite Engine with Domain Checking
+# ==========================================
+class RewriteEngine:
+    rules
+    domain_theory
+
+    function rewrite(node):
+        node = propagate_constraints(node)
+        for i, child in enumerate(node.children):
+            node.children[i] = rewrite(child)
+        for rule in rules:
+            new_node = rule.apply(node)
+            if new_node is not None:
+                new_node = propagate_constraints(new_node)
+                if domain_theory.validate(new_node):
+                    return rewrite(new_node)
+        return node
+
+# ==========================================
+# 7. E-Graph Equality Saturation
+# ==========================================
+class EGraph:
+    classes       # mapping from class_id -> set(nodes)
+    memo          # mapping node -> class_id
+    next_id
+
+    function add(node):
+        if node in memo:
+            return memo[node]
+        assign new class_id
+        classes[class_id] = {node}
+        memo[node] = class_id
+        return class_id
+
+    function merge(class1, class2):
+        merge node sets
+        update memo to reflect merged class
+
+    function rebuild():
+        update memo for all nodes
+
+function equality_saturate(egraph, rules, max_iterations=50):
+    for i = 1 to max_iterations:
+        new_merges = []
+        for each node in egraph:
+            for each rule in rules:
+                if rule applies:
+                    new_node = substitute(rule.replacement)
+                    new_id = egraph.add(new_node)
+                    new_merges.append((node_class_id, new_id))
+        if new_merges is empty:
+            break
+        for id1,id2 in new_merges:
+            egraph.merge(id1,id2)
+        egraph.rebuild()
+
+# ==========================================
+# 8. Automatic Differentiation
+# ==========================================
+class DiffNode(ExprNode):
+    function derivative(var):
+        if op == Add:
+            return Add([c.derivative(var) for c in children])
+        if op == Mul:
+            terms = []
+            for i, c in enumerate(children):
+                others = all children except i
+                terms.append(Mul([c.derivative(var)] + others))
+            return Add(terms)
+        if op == var:
+            return 1
+        return 0
+
